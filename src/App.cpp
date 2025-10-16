@@ -1152,8 +1152,7 @@ void App::_drawConfig()
 {
     if (ImGui::CollapsingHeader("App Config")) {
         if (ImGui::TreeNode("Shell Command")) {
-            ImGui::Text("NOTE: Headphones may send Events (displayed in the Messages section as Headphone Event: ...)");
-            ImGui::Text("NOTE: You may bind them to shell commands here.");
+            ImGui::TextWrapped("Headphones may send Events (displayed in the Messages section as Headphone Event: ...). You may bind them to shell commands here.");
             const ImGuiTableFlags flags = ImGuiTableFlags_Resizable | ImGuiTableFlags_Hideable | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersV;
             auto& cmds = _config.headphoneInteractionShellCommands;
             if (ImGui::BeginTable("Commands", 3, flags)) {
@@ -1296,6 +1295,9 @@ bool AppConfig::save(std::string const& configPath)
         return false;
 
     toml::table table;
+#ifdef _WIN32
+    table.insert("mica", mica);
+#endif
     table.insert("showDisclaimers", showDisclaimers);
     imguiSettings = ImGui::SaveIniSettingsToMemory();
     table.insert("imguiSettings", imguiSettings);

@@ -11,7 +11,7 @@
 #ifdef _WIN32
 #define NOMINMAX
 #include "platform/windows/WindowsBluetoothConnector.h"
-#include "platform/windows/ImmersiveColor.h"
+#include "platform/windows/DarkMode.h"
 #include "backends/imgui_impl_opengl3.h"
 #include <dwmapi.h>
 #define GLFW_EXPOSE_NATIVE_WIN32
@@ -91,7 +91,7 @@ bool g_micaSupported;
 
 void CheckMicaSupported()
 {
-    g_micaSupported = IsCompositionActive() && g_windowsVersionInfo.dwBuildNumber >= 22523;
+    g_micaSupported = g_windowsVersionInfo.dwBuildNumber >= 22523 && IsCompositionActive() && !IsHighContrast();
 }
 
 static ImVec4 HueSatShift(const ImVec4& col, float deltaH, float deltaS)
@@ -105,14 +105,8 @@ static ImVec4 HueSatShift(const ImVec4& col, float deltaH, float deltaS)
     return ImVec4(r, g, b, col.w);
 }
 
-static void ApplyAccentColorsToImGuiStyle(bool dark)
+static void ApplyAccentColorsToImGuiStyle(const ImVec4& accentColor, bool dark)
 {
-    // Accent colors are only supported on Windows 8+
-    if (g_windowsVersionInfo.dwBuildNumber < 9200)
-        return;
-
-    ImVec4 accentColor = ImColor(CImmersiveColor::GetColor(IMCLR_SystemAccent));
-
     // Convert accent color to hue for reference
     float accentH, accentS, accentV;
     ImGui::ColorConvertRGBtoHSV(accentColor.x, accentColor.y, accentColor.z, accentH, accentS, accentV);
@@ -204,19 +198,38 @@ static void ApplyAccentColorsToImGuiStyle(bool dark)
     }
 }
 
+BOOL ColorIsLight(COLORREF clr)
+{
+    return GetBValue(clr) + (5 * GetGValue(clr)) + (2 * GetRValue(clr)) > 0x400;
+}
+
 void UpdateWindowDwmAttributes(HWND hwnd)
 {
-    BOOL dark = ShouldAppsUseDarkMode();
+    CheckMicaSupported();
+
+    BOOL dark = DarkMode_IsDarkMode(hwnd);
 
     if (IsCompositionActive())
     {
-        DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+        if (g_windowsVersionInfo.dwBuildNumber >= 18362)
+        {
+            DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+        }
+        else
+        {
+            SetPropW(hwnd, L"UseImmersiveDarkModeColors", reinterpret_cast<HANDLE>(static_cast<INT_PTR>(dark)));
+        }
 
         if (g_micaSupported)
         {
             DWM_SYSTEMBACKDROP_TYPE backdrop = DWMSBT_MAINWINDOW;
             DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop, sizeof(backdrop));
         }
+    }
+
+    if (IsHighContrast())
+    {
+        dark = !ColorIsLight(GetSysColor(COLOR_WINDOW));
     }
 
     if (dark)
@@ -227,7 +240,11 @@ void UpdateWindowDwmAttributes(HWND hwnd)
     {
         ImGui::StyleColorsLight();
     }
-    ApplyAccentColorsToImGuiStyle(dark);
+
+    if (g_windowsVersionInfo.dwBuildNumber >= 10240)
+    {
+        ApplyAccentColorsToImGuiStyle(ImColor(CImmersiveColor::GetColor(IMCLR_SystemAccent)).Value, dark);
+    }
 }
 
 WNDPROC g_pfnOldWndProc;
@@ -236,9 +253,15 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
     switch (uMsg)
     {
+    case WM_SYSCOLORCHANGE:
+        {
+            UpdateWindowDwmAttributes(hwnd);
+            break;
+        }
     case WM_SETTINGCHANGE:
         {
-            if (lParam && wcscmp((LPCWSTR)lParam, L"ImmersiveColorSet") == 0)
+            if (CImmersiveColor::IsColorSchemeChangeMessage(uMsg, lParam)
+                || wParam == SPI_SETHIGHCONTRAST)
             {
                 UpdateWindowDwmAttributes(hwnd);
             }
@@ -246,7 +269,7 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         }
     case WM_DWMCOMPOSITIONCHANGED:
         {
-            CheckMicaSupported();
+            UpdateWindowDwmAttributes(hwnd);
             break;
         }
     }
@@ -308,7 +331,7 @@ void EnterGUIMainLoop(std::unique_ptr<IBluetoothConnector> btConnector)
 #ifdef _WIN32
     HWND hwnd = glfwGetWin32Window(window);
     g_pfnOldWndProc = (WNDPROC)SetWindowLongPtrW(hwnd, GWLP_WNDPROC, (LONG_PTR)MainWndProc);
-    CheckMicaSupported();
+    DarkMode_Init();
     UpdateWindowDwmAttributes(hwnd);
 #else
     ImGui::StyleColorsDark();
